@@ -1,0 +1,6 @@
+[theme]
+primaryColor = "#aa08d2"     # 主色調（按鈕、選取框等）
+backgroundColor = "#aa08d2"  # 背景顏色
+secondaryBackgroundColor = "#eaf700" # 側邊欄與元件背景
+textColor = "#aa08d2"        # 文字顏色
+font = "sans serif"          # 字體
