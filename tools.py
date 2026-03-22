@@ -142,7 +142,7 @@ def _sleep(sleep_time=10.0):
     time.sleep(sleep_time)
     return None
 # 預設工具列表
-_default_tools = [ leave, happy, never_gonna_give_you_up,_sleep]
+_default_tools = [ happy, never_gonna_give_you_up,_sleep]
 
 def get_tools():
     """
