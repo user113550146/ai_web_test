@@ -36,7 +36,7 @@ def log_security_event(event_type, details):
     print(event)  # 在生产环境中应该写入安全日志文件
 def leave():
     """
-    當使用者輸入'離開'時呼叫這個函數
+    當使用者輸入 '離開' 或要求退出時呼叫此函數。
     """
     #print("leave")
     import psutil
@@ -44,26 +44,22 @@ def leave():
         cmd = str(proc.info['cmdline'])
         if 'streamlit' in cmd:
             proc.terminate()
-    return
+    return "正在關閉應用程式..."
 
 def happy():
     """
-    當使用者開心的時候呼叫這個function
+    當使用者表達開心、滿意或慶祝時呼叫此函數。
     """
     st.balloons()
-    return
+    return "已顯示慶祝氣球！"
 
-def never_gonna_give_you_up(ai_response=None):
+def never_gonna_give_you_up(ai_response: str = ""):
     """
-    或者使用者輸入'rickroll'的時候呼叫
-    或者使用者輸入' 來部影片' 的時候呼叫
-    """
-    # """
-    # 執行狀態會被保存在 session_state 中，頁面重新加載時會保留結果
+    當使用者要求播放 Rickroll 影片、輸入 'rickroll' 或要求 '來部影片' 時呼叫。
 
-    # 參數:
-    #     ai_response: AI的回复內容，如果提供會一同保存到歷史記錄
-    # """
+    Args:
+        ai_response: AI 想要對使用者說的回覆內容。
+    """
     RICKROLL_URL = "https://youtu.be/dQw4w9WgXcQ?si=gnR0ti0GfmT9nSeu"
     
     # 初始化狀態
@@ -107,42 +103,24 @@ def never_gonna_give_you_up(ai_response=None):
             "video_url": RICKROLL_URL
         })
 
-    # 顯示執行狀態指示
-    # col1, col2 = st.columns(2)
-    # with col1:
-    #     st.success("✅ 視頻播放已保存到會話中")
-    # with col2:
-    #     if st.button("重置視頻狀態"):
-    #         st.session_state.rickroll_played = False
-    #         st.session_state.rickroll_timestamp = None
-    #         # 從歷史記錄中移除視頻記錄和相關的AI回复
-    #         filtered_history = []
-    #         skip_next = False
-    #         for msg in st.session_state.chat_history:
-    #             if skip_next:
-    #                 skip_next = False
-    #                 continue
-    #             if (msg.get("type") == "video" and RICKROLL_URL in msg.get("video_url", "")):
-    #                 skip_next = True  # 跳過下一個消息（通常是視頻消息之前的AI回复）
-    #                 continue
-    #             filtered_history.append(msg)
-    #         st.session_state.chat_history = filtered_history
-    #         st.rerun()
-    return
+    return f"已播放影片: {RICKROLL_URL}"
 
-def _sleep(sleep_time=10.0):
+def sleep(sleep_time: float = 10.0):
     """
-    當使用者輸入'sleep' 或'睡'時呼叫,必須等待return 
+    當使用者輸入 'sleep' 或 '睡' 時呼叫，程式會暫停一段時間。
+
+    Args:
+        sleep_time: 暫停的秒數（預設為 10.0 秒，必須在 0 到 60 之間）。
     """
     try:
-        if not(sleep_time>0 and sleep_time<60):
-            sleep_time=10.0
-    except :
-        sleep_time=10.0
+        if not (0 < sleep_time < 60):
+            sleep_time = 10.0
+    except:
+        sleep_time = 10.0
     time.sleep(sleep_time)
-    return None
+    return f"已暫停 {sleep_time} 秒"
 # 預設工具列表
-_default_tools = [ happy, never_gonna_give_you_up,_sleep]
+_default_tools = [ happy, never_gonna_give_you_up, sleep]
 
 def get_tools():
     """

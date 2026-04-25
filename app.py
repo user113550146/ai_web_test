@@ -1,6 +1,6 @@
 import os
 import streamlit as st
-import google.generativeai as genai
+from google import genai
 from dotenv import load_dotenv
 import chat
 import model_setting
@@ -11,13 +11,15 @@ user_ava="🟦"
 ai_ava="⚫"
 # 1. 讀取環境變數
 load_dotenv()
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+api_key = os.getenv("GOOGLE_API_KEY")
 
 # 初始化 tools session state (確保 tools 列表在 session 中保存)
 if "tools_list" not in st.session_state:
     tools.reset_tools()
 
-
+# 初始化 genai client
+if "genai_client" not in st.session_state:
+    st.session_state.genai_client = genai.Client(api_key=api_key)
 
 
 # 2. 頁面基本設定
@@ -54,57 +56,39 @@ st.markdown("""
 
 
 
-llmlist=['gemini-3.1-flash-lite-preview','gemini-3-flash-preview']
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-# --- 側邊欄：自訂 System Prompt ---
+# --- 預設參數 (不對使用者開放) ---
+temp = 0.5
+top = 0.85
+tok = 18
+mtk = 2048
+stream = False
+user_system_prompt = "你是一個專業的繁體中文助手。"
+rag_enabled = True
+rag_depth = 3
+
+# --- 側邊欄 ---
 with st.sidebar:
     st.title("設定")
-    choice=st.radio("模型",
-                    llmlist,
-                    key='model_sel',
-                    on_change=chat.rst,)
-    temp=st.slider(label="temperature",min_value=.0,max_value=1.5,value=0.5,step=0.05,format="%.2f")
-    top=st.slider(label="top_p",min_value=.0,max_value=1.0,value=0.85,step=0.05,format="%.2f")
-    tok=st.slider(label="top_k",min_value=1,max_value=35,value=18,step=1,format="%d")
-    mtk=st.slider(label="max_output_token",min_value=1,max_value=8192,value=2048,step=1,format="%d")
-    #web_content_url = st.text_input("參考網頁 URL (選填)")
-    #thought=st.checkbox(label="是否輸出思考過程",value=False,help="啟用後模型將在回應中包含思考過程的內容，適合需要分析推理的問題。")
-    stream=st.checkbox(label="streaming",value=True,on_change=chat.rst)
-    # 使用 text_area 讓使用者輸入長文本
-    if choice in ['gemini-3.1-flash-lite-preview','gemini-3-flash-preview'] :
-        user_system_prompt = st.text_area(
-            "System Prompt:",
-            value="你是一個不專業的繁體中文助手，請用毫不相干的話回答問題。",
-            height=200,
-            help="在這裡輸入你希望 AI 扮演的角色，例如：'你是一個AI'"
-        )
-        #st.info("更換 System Prompt 後建議清空對話")
-    else :
-        user_system_prompt =""
-    # 提供一個重置按鈕，因為更換角色通常需要清空記憶
-    # c1,c2=st.columns(2)
-    # with c1:
-    #     if st.button("更新設定"):
-    #         #st.session_state.chat_history = []
-    #         st.success("設定已更新！")
-    #         st.rerun()
-    # with c2:
-    #     if st.button("清空對話"):
-    #         #st.success("設定已更新！")
-    #         rstres=chat.rst()
-    #         if(rstres!=None):
-    #             print(rstres)
-    #         st.rerun()
-    # st.divider()
-    if st.button("更新設定並清空對話"):
-        st.success("設定已更新！")
-        rstres=chat.rst()
-        if(rstres!=None):
-            print(rstres)
+    
+    #st.subheader("多模態設定")
+    input_mode = st.radio("輸入格式", ["文字", "圖片"], key='input_mode', horizontal=True, on_change=chat.rst)
+    output_mode = st.radio("預期輸出", ["文字", "圖片"], key='output_mode', horizontal=True, on_change=chat.rst)
+    
+    # 根據輸出模式選擇模型
+    if output_mode == "圖片":
+        choice = 'gemini-2.5-flash-image'
+    else:
+        choice = 'gemini-2.5-flash'
+        
+    st.divider()
+    if st.button("清空對話", use_container_width=True):
+        st.success("對話已清空！")
+        chat.rst()
         st.rerun()
     
 #####model setting#####
-model= model_setting.initialize_gemini_model(model_name=choice, temperature=temp, top_p=top, top_k=tok, max_output_tokens=mtk, user_system_prompt=user_system_prompt)
+# 初始化模型配置
+model_config = model_setting.get_model_config(temperature=temp, top_p=top, top_k=tok, max_output_tokens=mtk, user_system_prompt=user_system_prompt, output_mode=output_mode)
+
 # 调用聊天界面
-chat.chat_interface(model, user_ava, ai_ava,stream)
+chat.chat_interface(st.session_state.genai_client, choice, model_config, user_ava, ai_ava, stream, input_mode, rag_enabled, rag_depth)

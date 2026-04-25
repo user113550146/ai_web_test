@@ -214,3 +214,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+gemini.md
+system_architecture.md
+introduction.txt

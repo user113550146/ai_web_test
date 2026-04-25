@@ -2,6 +2,10 @@
 # 聊天界面相关的函数模块
 
 import streamlit as st
+import rag_engine
+from google.genai import types
+from PIL import Image
+import io
 
 def rst():
     # 重置聊天会话
@@ -14,9 +18,8 @@ def rst():
         return e
 
 
-def init_chat_session(model,stream):
-    # 初始化聊天会话，使用 model.start_chat()
-    # 如果 stream 设置改变了，则重新初始化聊天会话
+def init_chat_session(client, model_id, config, stream):
+    # 初始化聊天会话
     
     should_reinit = False
     
@@ -28,17 +31,20 @@ def init_chat_session(model,stream):
         should_reinit = True
     elif st.session_state.get("last_stream_setting") != stream:
         should_reinit = True
+    # 檢查模型或配置是否改變
+    elif st.session_state.get("last_model_id") != model_id:
+        should_reinit = True
     
     if should_reinit:
-        # 创建新的聊天会话，初始历史为空
-        if not stream:
-            st.session_state.chat_session = model.start_chat(history=[],enable_automatic_function_calling=True)
-        else:
-            st.session_state.chat_session = model.start_chat(history=[],enable_automatic_function_calling=False)
-
+        # 使用新的 SDK 初始化對話
+        st.session_state.chat_session = client.chats.create(
+            model=model_id,
+            config=config,
+            history=[]
+        )
         st.session_state.chat_history = []
-        # 保存当前的 stream 设置
         st.session_state.last_stream_setting = stream
+        st.session_state.last_model_id = model_id
 
 
 def display_chat_history(user_ava, ai_ava):
@@ -51,6 +57,17 @@ def display_chat_history(user_ava, ai_ava):
             with st.chat_message("assistant", avatar=ai_ava):
                 st.markdown(message.get("content", "🎬 視頻"))
                 st.video(data=message["video_url"])
+        elif message.get("type") == "image":
+            # 渲染圖片歷史記錄
+            with st.chat_message(role, avatar=user_ava if role == "user" else ai_ava):
+                if "image_data" in message:
+                    st.image(message["image_data"], caption=message.get("content", ""))
+                elif "image_url" in message:
+                    st.image(message["image_url"], caption=message.get("content", ""))
+                
+                content = message.get("content", "")
+                if content:
+                    st.markdown(content)
         else:
             # 常规文本消息处理
             avatar = user_ava if role == "user" else ai_ava
@@ -58,170 +75,174 @@ def display_chat_history(user_ava, ai_ava):
                 st.markdown(message["content"])
 
 
-def add_user_message_to_history(prompt, user_ava):
-    # 清理用户输入，防止XSS
+def add_user_message_to_history(prompt, user_ava, image_data=None):
+    # 清理用户输入
     import re
     if prompt:
-        # 移除HTML标签和JavaScript
         prompt = re.sub(r'<[^>]+>', '', prompt)
-        prompt = re.sub(r'javascript:', '', prompt, flags=re.IGNORECASE)
-        prompt = re.sub(r'on\w+\s*=', '', prompt, flags=re.IGNORECASE)
-        # 限制长度
         prompt = prompt[:2000]
 
     with st.chat_message("user", avatar=user_ava):
-        st.write(prompt)
-    st.session_state.chat_history.append({
-        "role": "user",
-        "content": prompt
-    })
+        if image_data:
+            st.image(image_data, caption=prompt)
+        else:
+            st.write(prompt)
+            
+    if image_data:
+        st.session_state.chat_history.append({
+            "role": "user",
+            "type": "image",
+            "image_data": image_data,
+            "content": prompt
+        })
+    else:
+        st.session_state.chat_history.append({
+            "role": "user",
+            "content": prompt
+        })
+    return prompt
 
 
-def display_ai_response_stream(chat_session, prompt, ai_ava,stream):
+def display_ai_response_stream(chat_session, prompt_or_list, ai_ava, stream, original_query=None):
     
-    # 通过流式或非流式输出显示 AI 回应，并保存到历史记录
-    
-    # 参数:
-    #     chat_session: Gemini 聊天会话实例
-    #     prompt: 用户的问题
-    #     ai_ava: AI 头像
-    #     stream: 是否使用流式模式
-    
-    # 返回:
-    #     bool: 是否成功获取回应
-   
     with st.chat_message("assistant", avatar=ai_ava):
         response_placeholder = st.empty()
-        full_response = ""
+        full_response_text = ""
+        generated_images = []
         content_received = False
+        
         try:
-            # 根据 stream 模式选择不同的发送方式
             if stream:
                 # 流式模式
-                response = chat_session.send_message(prompt, stream=True)
-            else:
-                # 非流式模式，使用字典方式配置 tool_config
-                tool_config = {
-                    "function_calling_config": {
-                        "mode": "AUTO"
-                    }
-                }
-                response = chat_session.send_message(prompt, stream=False, tool_config=tool_config)
-            # 逐块处理响应
-            for chunk in response:
-                try:
-                    if chunk.text:
+                response_stream = chat_session.send_message_stream(prompt_or_list)
+                if response_stream:
+                    for chunk in response_stream:
                         content_received = True
-                        full_response += chunk.text
-                        # 实时更新显示 (加上游标感)
-                        if stream:
-                            response_placeholder.write(full_response + "▌")
-                except (ValueError, IndexError):
-                    # chunk.text 被攔截时继续处理下一块
-                    continue
+                        # 處理 chunk
+                        if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                            for part in chunk.candidates[0].content.parts:
+                                if part.text:
+                                    full_response_text += part.text
+                                    response_placeholder.write(full_response_text + "▌")
+                                if part.inline_data:
+                                    # 修正：SDK 可能返回 types.Image 而非 PIL Image
+                                    res = part.as_image()
+                                    img = res._pil_image if hasattr(res, '_pil_image') else res
+                                    
+                                    # 安全地設置 format 屬性（僅針對 PIL Image）
+                                    if hasattr(img, 'format') and not getattr(img, 'format', None):
+                                        try:
+                                            img.format = "PNG"
+                                        except:
+                                            pass
+                                    generated_images.append(img)
+            else:
+                # 非流式模式
+                response = chat_session.send_message(prompt_or_list)
+                if response:
+                    content_received = True
+                    if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                        for part in response.candidates[0].content.parts:
+                            if part.text:
+                                full_response_text += part.text
+                            if part.inline_data:
+                                # 修正：SDK 可能返回 types.Image 而非 PIL Image
+                                res = part.as_image()
+                                img = res._pil_image if hasattr(res, '_pil_image') else res
+                                
+                                # 安全地設置 format 屬性（僅針對 PIL Image）
+                                if hasattr(img, 'format') and not getattr(img, 'format', None):
+                                    try:
+                                        img.format = "PNG"
+                                    except:
+                                        pass
+                                generated_images.append(img)
+                
+                response_placeholder.write(full_response_text)
 
             # 响应完成后的处理
             if content_received:
-                # 清理AI回复内容
-                import re
-                full_response = re.sub(r'<script[^>]*>.*?</script>', '', full_response, flags=re.IGNORECASE | re.DOTALL)
-                full_response = re.sub(r'javascript:', '', full_response, flags=re.IGNORECASE)
-                full_response = full_response[:10000]  # 限制长度
+                # 顯示所有生成的圖片
+                if generated_images:
+                    response_placeholder.empty()
+                    for img in generated_images:
+                        st.image(img)
+                    if full_response_text:
+                        st.markdown(full_response_text)
+                    
+                    # 保存到歷史記錄
+                    st.session_state.chat_history.append({
+                        "role": "assistant",
+                        "type": "image",
+                        "image_data": generated_images[0],
+                        "content": full_response_text
+                    })
+                else:
+                    response_placeholder.write(full_response_text)
+                    st.session_state.chat_history.append({
+                        "role": "assistant",
+                        "content": full_response_text
+                    })
 
-                # 移除游标，显示最终完整内容
-                response_placeholder.write(full_response)
-                # 保存到历史记录
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": full_response
-                })
-
-                # 检查是否有工具调用
-                if hasattr(response, 'candidates') and response.candidates:
-                    candidate = response.candidates[0]
-                    if hasattr(candidate, 'function_calls') and candidate.function_calls:
-                        for function_call in candidate.function_calls:
-                            # 获取工具函数
-                            tool_name = function_call.name
-                            tool_args = function_call.args if hasattr(function_call, 'args') else {}
-
-                            # 动态导入并调用工具函数
-                            try:
-                                import tools
-                                if hasattr(tools, tool_name):
-                                    tool_func = getattr(tools, tool_name)
-                                    # 传递AI回复内容给工具函数
-                                    tool_func(ai_response=full_response, **tool_args)
-                            except Exception as e:
-                                st.error(f"工具调用错误: {e}")
-
+                # RAG 記憶儲存 (使用原始查詢)
+                save_query = original_query if original_query is not None else prompt_or_list
+                rag_engine.save_memory(save_query, full_response_text)
                 return True
             else:
-                # 整个流程完成但没有获取到内容 - 通常是安全过滤器拦截
-                if response.candidates and len(response.candidates) > 0:
-                    candidate = response.candidates[0]
-                    reason = candidate.finish_reason
-                    
-                    # 列出可能的原因代码
-                    reason_map = {
-                        0: "未指定原因",
-                        1: "STOP - 模型正常停止",
-                        2: "MAX_TOKENS - 达到最大 token 数",
-                        3: "SAFETY - 被安全政策拦截",
-                        4: "RECITATION - 涉及过多引述内容"
-                    }
-                    
-                    reason_text = reason_map.get(reason, f"未知原因代码: {reason}")
-                    
-                    st.warning(
-                        f"⚠️ 回应未产出\n\n"
-                        f"**原因**: {reason_text}\n\n"
-                        "**建议**:\n"
-                        "- 尝试换个更具体的问题\n"
-                        "- 避免敏感或有争议的话题\n"
-                        "- 检查 System Prompt 是否过于激进"
-                    )
-                else:
-                    st.error("❌ 无法获取模型回应，请稍后重试。")
+                st.error("❌ 無法獲取模型回應。")
                 return False
 
         except Exception as e:
-            error_str = str(e).lower()
-            # 檢查是否為配額超限錯誤（429）
-            if "429" in error_str or "quota" in error_str or "exceeded" in error_str:
-                st.error(
-                    "❌ **API 配額已用完**\n\n"
-                    "免費層已達今日使用限制。解決方案：\n"
-                    "1. **等待 24 小時** - 配額會在午夜 UTC 時重置\n"
-                    "2. **升級計畫** - 查看 Google AI Studio 升級到付費版本\n"
-                    "3. **稍後重試** - 等待一段時間後重試\n\n"
-                    f"詳情: {e}"
-                )
-            else:
-                st.error(f"API 连接或其他错误: {e}")
+            st.error(f"API 連接或其他錯誤: {e}")
             return False
 
 
-def chat_interface(model, user_ava, ai_ava,stream):
+def chat_interface(client, model_id, config, user_ava, ai_ava, stream, input_mode="文字", rag_enabled=True, rag_depth=3):
     
-    # 主聊天界面逻辑
-    # 使用 model.start_chat() 方式管理聊天会话
-    
-    # 参数:
-    #     model: Gemini 模型实例
-    #     user_ava: 用户头像
-    #     ai_ava: AI 头像
-   
     # 初始化聊天会话
-    init_chat_session(model,stream)
+    init_chat_session(client, model_id, config, stream)
 
     # 显示历史对话
     display_chat_history(user_ava, ai_ava)
 
-    # 处理用户输入
-    if prompt := st.chat_input("你有什麽問題?"):
-        # 显示用户消息
-        add_user_message_to_history(prompt, user_ava)
+    prompt = None
+    image_data = None
+    
+    if input_mode == "文字":
+        prompt = st.chat_input("你有什麼問題?")
+    else:
+        with st.container():
+            st.info("請上傳圖片，您可以附加文字說明一起送出給 AI。")
+            uploaded_file = st.file_uploader("選擇圖片...", type=["jpg", "jpeg", "png", "webp"])
+            text_input = st.text_input("圖片說明 (選填)")
+            
+            if st.button("送出圖片") and uploaded_file is not None:
+                from PIL import Image
+                try:
+                    image_data = Image.open(uploaded_file)
+                    prompt = text_input if text_input else "請描述這張圖片"
+                except Exception as e:
+                    st.error(f"讀取圖片失敗: {e}")
 
-        # 调用聊天会话并显示流式响应
-        display_ai_response_stream(st.session_state.chat_session, prompt, ai_ava,stream=stream)
+    if prompt is not None or image_data is not None:
+        
+        safe_prompt = add_user_message_to_history(prompt, user_ava, image_data)
+
+        # RAG 檢索
+        final_prompt = safe_prompt
+        original_query = safe_prompt
+        if image_data:
+            original_query = [safe_prompt, image_data]
+
+        if rag_enabled:
+            retrieved_context = rag_engine.retrieve_context(safe_prompt, limit=rag_depth)
+            if retrieved_context:
+                final_prompt = f"【以下是先前的相關對話脈絡提供參考】\n{retrieved_context}\n\n【當前問題】\n{safe_prompt}"
+
+        if image_data:
+            content_to_send = [final_prompt, image_data]
+        else:
+            content_to_send = final_prompt
+
+        # 调用聊天会话
+        display_ai_response_stream(st.session_state.chat_session, content_to_send, ai_ava, stream=stream, original_query=original_query)
